@@ -1,0 +1,12 @@
+.env
+__pycache__/
+*.pyc
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.DS_Store
+.gp_ai_windows.pid
+gp_ai_windows.log
+gp_ai_windows.err.log

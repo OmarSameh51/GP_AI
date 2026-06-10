@@ -1,0 +1,25 @@
+# Hand-extracted from دليل الطالب في اللائحة الجديدة.pdf
+# These are placeholders — fill in the real numbers from the guide.
+defaults:
+  max_credits_per_term: 18
+  min_credits_per_term: 12
+  max_suggestions_per_plan: 6
+
+load_rules:
+  - if: { gpa_lt: 2.0 }
+    then: { max_credits_per_term: 15 }
+  - if: { gpa_gte: 3.0 }
+    then: { max_credits_per_term: 21 }
+
+departments:
+  CS:      { total_required_hours: 144 }
+  AI:      { total_required_hours: 144 }
+  IT:      { total_required_hours: 144 }
+  IS:      { total_required_hours: 144 }
+  General: { total_required_hours: 144 }
+
+# Graduation project (AI497/498, CS497/498, IS497/498, IT497/498):
+# belongs to the student's own department and unlocks at 102 earned
+# credit hours (= level 4 by hours, even with leftover earlier courses).
+graduation_project:
+  min_credit_hours: 102

@@ -105,14 +105,33 @@ def _order_candidates(
     return sorted(candidates, key=key)
 
 
+def _term_cap(
+    base_cap: int,
+    year: int | None,
+    semester: int | None,
+    entries: list[dict],
+) -> int:
+    """Year 4 semester 1 with a graduation project in the term raises the
+    cap to ``policy.grad_project_term_max``. Otherwise returns ``base_cap``."""
+    if year != 4 or semester != 1:
+        return base_cap
+    has_project = any(
+        _PROJECT_RE.match(e["course"].get("Code") or "") for e in entries
+    )
+    if not has_project:
+        return base_cap
+    return max(base_cap, policy.grad_project_term_max())
+
+
 async def _select_plan(
     *,
     candidates: list[dict],
     gpa: float | None,
     level: int,
     preferred_dept: str | None,
+    semester: int | None = None,
 ) -> tuple[list[dict], str]:
-    max_credits = policy.max_credits_for(gpa)
+    base_cap = policy.max_credits_for(gpa)
     max_courses = policy.max_suggestions()
 
     ranked = _order_candidates(candidates, preferred_dept)
@@ -122,12 +141,15 @@ async def _select_plan(
     cand_tuples = [(e["course"]["Code"], _credits(e["course"])) for e in short]
     completed_hint: list[str] = []  # not needed for guest; advisor.py callers pass [] for guest
 
+    # Tell the LLM the cap it could reach if the grad-project bonus applies.
+    prompt_cap = _term_cap(base_cap, level, semester, short)
+
     user_prompt = llm.build_user_prompt(
         gpa=gpa,
         level=level,
         preferred_dept=preferred_dept,
         max_courses=max_courses,
-        max_credits=max_credits,
+        max_credits=prompt_cap,
         completed=completed_hint,
         candidates=cand_tuples,
     )
@@ -151,7 +173,8 @@ async def _select_plan(
             continue
         entry = code_to_entry[code]
         hrs = _credits(entry["course"])
-        if used + hrs > max_credits or len(chosen) >= max_courses:
+        cap_after = _term_cap(base_cap, level, semester, chosen + [entry])
+        if used + hrs > cap_after or len(chosen) >= max_courses:
             continue
         chosen.append(entry)
         used += hrs
@@ -166,7 +189,8 @@ async def _select_plan(
             if code in seen:
                 continue
             hrs = _credits(entry["course"])
-            if used + hrs > max_credits:
+            cap_after = _term_cap(base_cap, level, semester, chosen + [entry])
+            if used + hrs > cap_after:
                 continue
             chosen.append(entry)
             used += hrs
@@ -298,7 +322,7 @@ def simulate_roadmap(
     prereqs unlock progressively as earlier terms complete."""
     taken = {c.upper().strip() for c in passed_codes}
     hours = taken_hours
-    max_credits = policy.max_credits_for(gpa)
+    base_cap = policy.max_credits_for(gpa)
     max_courses = policy.max_suggestions()
     project_chain = _project_prereq_closure(catalog, preferred_dept)
 
@@ -337,7 +361,8 @@ def simulate_roadmap(
             if len(chosen) >= max_courses:
                 break
             hrs = _credits(e["course"])
-            if used + hrs > max_credits:
+            cap_after = _term_cap(base_cap, year, semester, chosen + [e])
+            if used + hrs > cap_after:
                 continue
             chosen.append(e)
             used += hrs
@@ -490,6 +515,7 @@ async def advise_student(req: StudentAdviceRequest) -> AdviceResponse:
         gpa=snap["gpa"],
         level=snap["academicYear"],
         preferred_dept=preferred,
+        semester=req.semester,
     )
 
     plan = _to_plan_courses(chosen)
@@ -527,6 +553,7 @@ async def advise_guest(req: GuestAdviceRequest) -> AdviceResponse:
         gpa=None,
         level=req.academicYear,
         preferred_dept=preferred,
+        semester=req.semester,
     )
 
     plan = _to_plan_courses(chosen)

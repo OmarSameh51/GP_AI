@@ -4,6 +4,9 @@ defaults:
   max_credits_per_term: 18
   min_credits_per_term: 12
   max_suggestions_per_plan: 6
+  # Year 4 semester 1 exception: when the term includes a graduation
+  # project (AI/CS/IS/IT 497/498), the cap rises to this value.
+  grad_project_term_max: 21
 
 load_rules:
   - if: { gpa_lt: 2.0 }

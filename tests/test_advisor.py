@@ -199,3 +199,91 @@ def test_roadmap_graduation_project_rules():
     assert "AI498" in codes  # own department's project appears...
     early = [c["course"]["Code"] for t in terms[:2] for c in t["entries"]]
     assert "AI498" not in early  # ...but only once 102 earned hours are reached
+
+
+def test_roadmap_grad_project_lifts_cap_in_year4_sem1():
+    # Year 4 sem 1, GPA cap = 18 (gpa=None). Grad project is 6 credits;
+    # without the exception, only four 3-credit fillers (18) would fit
+    # alongside it would actually exceed (6 + 3*4 = 18 — fits exactly).
+    # So instead use 6 + filler*3 to push to 21 and verify it lands.
+    filler = [
+        {
+            "course": {"Code": f"F{i:02d}", "Credits": 3, "Semester": 1, "Required_Hours": 0},
+            "prereqs": [],
+            "deptLinks": [],
+        }
+        for i in range(10)
+    ]
+    project = {
+        "course": {"Code": "AI498", "Credits": 6, "Semester": 1, "Required_Hours": 0},
+        "prereqs": [],
+        "deptLinks": [],
+    }
+    terms, _ = advisor.simulate_roadmap(
+        catalog=[project] + filler,
+        passed_codes=[],
+        start_year=4,
+        start_semester=1,
+        preferred_dept="AI",
+        gpa=None,
+        required_hours=200,  # force the planner to fill as much as the cap allows
+        taken_hours=102,
+    )
+    first = terms[0]
+    assert first["academicYear"] == 4 and first["semester"] == 1
+    codes = [e["course"]["Code"] for e in first["entries"]]
+    assert "AI498" in codes
+    # Grad-project bonus: 6 (project) + 5*3 (fillers) = 21
+    assert first["credits"] == 21
+
+
+def test_roadmap_no_cap_lift_without_grad_project():
+    # Same setup but no grad project in the catalog — cap stays at 18.
+    filler = [
+        {
+            "course": {"Code": f"F{i:02d}", "Credits": 3, "Semester": 1, "Required_Hours": 0},
+            "prereqs": [],
+            "deptLinks": [],
+        }
+        for i in range(10)
+    ]
+    terms, _ = advisor.simulate_roadmap(
+        catalog=filler,
+        passed_codes=[],
+        start_year=4,
+        start_semester=1,
+        preferred_dept="AI",
+        gpa=None,
+        required_hours=200,
+        taken_hours=102,
+    )
+    assert terms[0]["credits"] == 18
+
+
+def test_roadmap_no_cap_lift_in_year4_sem2():
+    # Year 4 sem 2 with a grad project: the bonus must NOT apply
+    # (the exception is limited to semester 1).
+    filler = [
+        {
+            "course": {"Code": f"F{i:02d}", "Credits": 3, "Semester": 2, "Required_Hours": 0},
+            "prereqs": [],
+            "deptLinks": [],
+        }
+        for i in range(10)
+    ]
+    project = {
+        "course": {"Code": "AI498", "Credits": 6, "Semester": 2, "Required_Hours": 0},
+        "prereqs": [],
+        "deptLinks": [],
+    }
+    terms, _ = advisor.simulate_roadmap(
+        catalog=[project] + filler,
+        passed_codes=[],
+        start_year=4,
+        start_semester=2,
+        preferred_dept="AI",
+        gpa=None,
+        required_hours=200,
+        taken_hours=102,
+    )
+    assert terms[0]["credits"] == 18

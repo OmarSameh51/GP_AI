@@ -34,6 +34,10 @@ def graduation_project_min_hours() -> int:
     return load_policy().get("graduation_project", {}).get("min_credit_hours", 102)
 
 
+def grad_project_term_max() -> int:
+    return load_policy()["defaults"].get("grad_project_term_max", 21)
+
+
 def total_required_hours(department: str) -> int:
     policy = load_policy()
     return policy["departments"].get(department, {}).get(

@@ -1,10 +1,14 @@
 from contextlib import asynccontextmanager
 from fastapi import Depends, FastAPI, HTTPException, status
 
-from . import advisor, llm, mongo_repo, neo4j_repo
+from . import advisor, gpa_forecast, grade_predictor, llm, mongo_repo, neo4j_repo
 from .auth import require_internal_key
 from .schemas import (
     AdviceResponse,
+    GpaForecastRequest,
+    GpaForecastResponse,
+    GradePredictionRequest,
+    GradePredictionResponse,
     GuestAdviceRequest,
     RoadmapResponse,
     StudentAdviceRequest,
@@ -83,3 +87,26 @@ async def summarize(req: SummarizeRequest):
             status_code=status.HTTP_502_BAD_GATEWAY, detail="AI summarization failed"
         )
     return SummarizeResponse(summary=summary)
+
+
+@app.post(
+    "/v1/forecast/gpa",
+    response_model=GpaForecastResponse,
+    dependencies=[Depends(require_internal_key)],
+)
+async def forecast_gpa(req: GpaForecastRequest):
+    try:
+        return await gpa_forecast.forecast_student_gpa(req.studentId)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+
+
+@app.post(
+    "/v1/predict/grade",
+    response_model=GradePredictionResponse,
+    dependencies=[Depends(require_internal_key)],
+)
+async def predict_grade(req: GradePredictionRequest):
+    return grade_predictor.predict_grade(
+        req.coursework, req.midterm, req.courseworkMax, req.midtermMax
+    )

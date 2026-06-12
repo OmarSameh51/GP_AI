@@ -1,5 +1,5 @@
 from typing import Literal, Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 Department = Literal["AI", "CS", "IT", "IS", "General"]
 
@@ -63,6 +63,45 @@ class RoadmapResponse(BaseModel):
 
 class SummarizeRequest(BaseModel):
     text: str = Field(min_length=1)
+
+
+class GpaForecastRequest(BaseModel):
+    studentId: str
+
+
+class GradePredictionRequest(BaseModel):
+    coursework: float = Field(ge=0)
+    midterm: float = Field(ge=0)
+    courseworkMax: float = Field(default=25, gt=0, lt=100)
+    midtermMax: float = Field(default=25, gt=0, lt=100)
+
+    @model_validator(mode="after")
+    def check_marks(self):
+        if self.coursework > self.courseworkMax:
+            raise ValueError("coursework exceeds courseworkMax")
+        if self.midterm > self.midtermMax:
+            raise ValueError("midterm exceeds midtermMax")
+        if self.courseworkMax + self.midtermMax >= 100:
+            raise ValueError("courseworkMax + midtermMax must leave marks for the final exam")
+        return self
+
+
+class GradePredictionResponse(BaseModel):
+    predictedFinal: float
+    finalMax: float
+    predictedTotal: float
+    letter: str
+    gradePoints: float
+    passLikely: bool
+
+
+class GpaForecastResponse(BaseModel):
+    forecastGPA: float
+    currentGPA: float
+    completedCredits: int
+    remainingCredits: int
+    sampleSize: int
+    aiUsed: bool
 
 
 class SummarizeResponse(BaseModel):

@@ -1,6 +1,13 @@
+import os
 from typing import Optional
+
+import certifi
 from neo4j import AsyncGraphDatabase, AsyncDriver
 from .deps import get_settings
+
+# Aura's TLS certs are issued by SSL.com, whose root CA is often missing from
+# the local Windows cert store; verify against the bundled Mozilla CA list.
+os.environ.setdefault("SSL_CERT_FILE", certifi.where())
 
 _driver: Optional[AsyncDriver] = None
 

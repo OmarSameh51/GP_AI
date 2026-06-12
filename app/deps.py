@@ -1,4 +1,5 @@
 from functools import lru_cache
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -21,6 +22,11 @@ class Settings(BaseSettings):
     OLLAMA_TIMEOUT: int = 60
 
     POLICY_FILE: str = "data/policy.yaml"
+
+    @field_validator("OLLAMA_URL")
+    @classmethod
+    def _strip_trailing_slash(cls, v: str) -> str:
+        return v.rstrip("/")
 
 
 @lru_cache

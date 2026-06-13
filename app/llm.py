@@ -43,7 +43,9 @@ async def chat_json(user_prompt: str) -> dict:
         "model": s.OLLAMA_MODEL,
         "stream": False,
         "format": "json",
-        "options": {"num_predict": s.OLLAMA_NUM_PREDICT, "temperature": 0.2},
+        # temperature 0: course selection should be deterministic — a refresh
+        # with the same candidates must produce the same plan.
+        "options": {"num_predict": s.OLLAMA_NUM_PREDICT, "temperature": 0.0},
         "messages": [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": user_prompt},

@@ -76,6 +76,44 @@ def _filter_by_semester(courses: list[dict], semester: int | None) -> list[dict]
     return out
 
 
+def _is_foundational(course: dict) -> bool:
+    """True for link-less courses that are genuinely common-core for every
+    department (e.g. MA111 at Required_level 1-2). Higher-level link-less
+    courses are more likely missing department metadata than a real
+    requirement for the student's department, so they shouldn't outrank
+    that department's own electives."""
+    required_level = course.get("Required_level")
+    try:
+        return required_level is None or int(required_level) <= 2
+    except (TypeError, ValueError):
+        return False
+
+
+def _priority_bucket(entry: dict, preferred_dept: str | None) -> int:
+    """-1: own-dept graduation project (mandatory, already gated on eligibility).
+    0: preferred-dept mandatory course, or a foundational common-core course
+    with no department link (mandatory for everyone, e.g. MA111).
+    1: preferred-dept elective. 2: everything else."""
+    code = entry["course"].get("Code") or ""
+    if preferred_dept and _project_dept(code) == preferred_dept:
+        return -1
+    links = [link for link in entry["deptLinks"] if link and link.get("dept")]
+    if not links:
+        return 0 if _is_foundational(entry["course"]) else 2
+    is_mandatory = any(
+        link.get("dept") == preferred_dept
+        and link.get("kind") == "Contains_Mandatory"
+        for link in links
+    )
+    if is_mandatory:
+        return 0
+    is_elective = any(
+        link.get("dept") == preferred_dept and link.get("kind") == "Contains_Elective"
+        for link in links
+    )
+    return 1 if is_elective else 2
+
+
 def _order_candidates(
     candidates: list[dict], preferred_dept: str | None
 ) -> list[dict]:
@@ -84,23 +122,7 @@ def _order_candidates(
 
     def key(entry: dict):
         code = entry["course"].get("Code") or ""
-        if preferred_dept and _project_dept(code) == preferred_dept:
-            return (-1, code)
-        links = entry["deptLinks"]
-        is_mandatory = any(
-            link.get("dept") == preferred_dept
-            and link.get("kind") == "Contains_Mandatory"
-            for link in links
-            if link
-        )
-        is_elective = any(
-            link.get("dept") == preferred_dept
-            and link.get("kind") == "Contains_Elective"
-            for link in links
-            if link
-        )
-        bucket = 0 if is_mandatory else (1 if is_elective else 2)
-        return (bucket, code)
+        return (_priority_bucket(entry, preferred_dept), code)
 
     return sorted(candidates, key=key)
 
@@ -112,7 +134,8 @@ def _term_cap(
     entries: list[dict],
 ) -> int:
     """Year 4 semester 1 with a graduation project in the term raises the
-    cap to ``policy.grad_project_term_max``. Otherwise returns ``base_cap``."""
+    cap to ``policy.year4_sem1_credit_max``, regardless of GPA. Otherwise
+    returns ``base_cap``."""
     if year != 4 or semester != 1:
         return base_cap
     has_project = any(
@@ -120,7 +143,7 @@ def _term_cap(
     )
     if not has_project:
         return base_cap
-    return max(base_cap, policy.grad_project_term_max())
+    return max(base_cap, policy.year4_sem1_credit_max())
 
 
 async def _select_plan(
@@ -135,54 +158,77 @@ async def _select_plan(
     max_courses = policy.max_suggestions()
 
     ranked = _order_candidates(candidates, preferred_dept)
-    # Cap the candidate set we hand to the LLM so the prompt stays small.
-    short = ranked[: max(max_courses * 3, 12)]
-    code_to_entry = {e["course"]["Code"]: e for e in short}
-    cand_tuples = [(e["course"]["Code"], _credits(e["course"])) for e in short]
-    completed_hint: list[str] = []  # not needed for guest; advisor.py callers pass [] for guest
 
-    # Tell the LLM the cap it could reach if the grad-project bonus applies.
-    prompt_cap = _term_cap(base_cap, level, semester, short)
-
-    user_prompt = llm.build_user_prompt(
-        gpa=gpa,
-        level=level,
-        preferred_dept=preferred_dept,
-        max_courses=max_courses,
-        max_credits=prompt_cap,
-        completed=completed_hint,
-        candidates=cand_tuples,
-    )
-
-    try:
-        out = await llm.chat_json(user_prompt)
-        ai_used = True
-    except Exception:
-        out = {"plan": [], "notes": ""}
-        ai_used = False
-
-    raw_codes = [str(c).upper().strip() for c in (out.get("plan") or [])]
-    notes = str(out.get("notes") or "").strip()
-
-    # Re-validate: keep only codes that were in the candidate set
+    # Reserve mandatory courses (and the own-dept grad project) first, so the
+    # LLM can't crowd them out with electives. This matters most in year 4
+    # sem 1, where the raised cap exists precisely to fit the grad project
+    # alongside the mandatory prereq-unlocking courses.
     chosen: list[dict] = []
     used = 0
     seen: set[str] = set()
-    for code in raw_codes:
-        if code in seen or code not in code_to_entry:
+    for entry in ranked:
+        if _priority_bucket(entry, preferred_dept) > 0:
             continue
-        entry = code_to_entry[code]
         hrs = _credits(entry["course"])
         cap_after = _term_cap(base_cap, level, semester, chosen + [entry])
         if used + hrs > cap_after or len(chosen) >= max_courses:
             continue
         chosen.append(entry)
         used += hrs
-        seen.add(code)
+        seen.add(entry["course"]["Code"])
 
-    # Deterministic top-up if LLM under-delivered (or failed)
-    if not chosen:
-        ai_used = False
+    remaining_cap = max(0, _term_cap(base_cap, level, semester, chosen) - used)
+    remaining_courses = max_courses - len(chosen)
+
+    # Cap the candidate set we hand to the LLM so the prompt stays small.
+    leftover = [e for e in ranked if e["course"]["Code"] not in seen]
+    short = leftover[: max(max_courses * 3, 12)]
+    code_to_entry = {e["course"]["Code"]: e for e in short}
+    cand_tuples = [(e["course"]["Code"], _credits(e["course"])) for e in short]
+    completed_hint: list[str] = []  # not needed for guest; advisor.py callers pass [] for guest
+
+    ai_used = False
+    notes = ""
+    if short and remaining_courses > 0 and remaining_cap > 0:
+        user_prompt = llm.build_user_prompt(
+            gpa=gpa,
+            level=level,
+            preferred_dept=preferred_dept,
+            max_courses=remaining_courses,
+            max_credits=remaining_cap,
+            completed=completed_hint,
+            candidates=cand_tuples,
+        )
+
+        try:
+            out = await llm.chat_json(user_prompt)
+            ai_used = True
+        except Exception:
+            out = {"plan": [], "notes": ""}
+            ai_used = False
+
+        raw_codes = [str(c).upper().strip() for c in (out.get("plan") or [])]
+        notes = str(out.get("notes") or "").strip()
+
+        # Re-validate: keep only codes that were in the candidate set
+        llm_chosen = 0
+        for code in raw_codes:
+            if code in seen or code not in code_to_entry:
+                continue
+            entry = code_to_entry[code]
+            hrs = _credits(entry["course"])
+            cap_after = _term_cap(base_cap, level, semester, chosen + [entry])
+            if used + hrs > cap_after or len(chosen) >= max_courses:
+                continue
+            chosen.append(entry)
+            used += hrs
+            seen.add(code)
+            llm_chosen += 1
+
+        if llm_chosen == 0:
+            ai_used = False
+
+    # Deterministic top-up if the LLM under-delivered (or failed/was skipped)
     if len(chosen) < max_courses:
         for entry in ranked:
             code = entry["course"]["Code"]
